@@ -1,0 +1,2152 @@
+---
+title: "SummarySporeTraitAnalysis"
+author: "Carlos"
+date: "22/04/2020"
+output:
+  html_document: default
+  word_document: default
+---
+
+Loading data
+
+```{r, message=FALSE, warning=FALSE}
+
+library(performance)
+library(tidyverse)
+library(lme4)
+library(lmerTest)
+library(MuMIn)
+library(broom)
+library(pixiedust)
+library(phylolm)
+
+
+AllFungi <- readRDS("AllFungi.RDS")
+BirdEgg <- readRDS("BirdEgg.RDS")
+FungalTaxanomy_col <- readRDS("FungalTaxanomy_col.RDS")
+FunGuildData <- readRDS("FunGuildData.RDS")
+kewData <- readRDS("kewData.RDS")
+Li_tree_names <- readRDS("Li_tree_names.RDS")
+Li_tree <- readRDS("Li_tree.RDS")
+Spore_data <- readRDS("Spore_data.RDS")
+Spore_functions <- readRDS("Spore_functions.RDS")
+To_Analysis <- readRDS("Spore_functions.RDS")
+
+Spore_data2 <- Spore_functions
+Spore_data2 <- Spore_data2[-which(duplicated(Spore_data2$names_to_use)),
+                           c("phylum","class", "order","family","genus","names_to_use")]
+
+Spore_data2$phylum_ <- Spore_data2$phylum
+
+# Standardizing the taxonomy based on the Mycota
+
+Spore_data2$phylum_[which(Spore_data2$order=="Basidiobolales")] <- "Basidiobolomycota" 
+Spore_data2$class[which(Spore_data2$order=="Basidiobolales")] <- "Basidiobolomycetes" 
+
+Spore_data2$phylum_[grep("Blastocladiales|Catenomycetales|Callimastigales", Spore_data2$order)]# Tested, they are clasified as Blastocladiomycota
+
+Spore_data2$phylum_[grep("Calcarisporiellales", Spore_data2$order)] <- "Calcarisporiellomycota" 
+
+Spore_data2$phylum_[grep("Chytridiales|Nephridiophagales|Polyphagales|Saccopodiales|Cladochytriales|Lobulomycetales|Gromochytriales|Mesochytriales|Polychytriales|Rhizophydiales|Rhizophlyctidales|Spizellomycetales|Synchytriales", Spore_data2$order)] #Tested, they are classifed as Chytrids
+
+
+Spore_data2$phylum_[grep("Entomophthorales|Neozygitales", Spore_data2$order)] <- "Entomophthoromycota" 
+
+Spore_data2$phylum_[grep("Asellariales|Asellarialles|Barbatosporales|Dimargaritales|Harpellales|Kickxellales|Ramicandelaberales", Spore_data2$order)] <- "Kickxellomycota" 
+
+Spore_data2$phylum_[grep("Hyaloraphidiales|Monoblepharidales|Sanchytriales", Spore_data2$order)] <- "Monoblepharomycota" 
+
+Spore_data2$phylum_[grep("Mortierellales", Spore_data2$order)] <- "Mortierellomycota" 
+
+Spore_data2$phylum_[grep("Endogonales|Mucorales|Umbelopsidales", Spore_data2$order)] <- "Mucoromycota" 
+
+Spore_data2$phylum_[grep("Neocallimastigales", Spore_data2$order)] # Tested, listed as Neocallimastigomycota
+
+Spore_data2$phylum_[grep("Metchnikovellida|Amblyosporida|Neopereziida|Ovavesiculida|Glugeida|Nosematida|Chytridiopsida", Spore_data2$order)] <- "Rozellomycota"
+
+Spore_data2$phylum_[Spore_data2$phylum=="Microsporidia"] <- "Rozellomycota"
+
+Spore_data2$phylum_[grep("Zoopagales", Spore_data2$order)] <- "Zoopagomycota" # Tested, listed as
+
+#Spore_data2<-Spore_data2[complete.cases(Spore_data2),]
+
+nta<-
+  which(rowSums(sapply(Spore_data2[,c("phylum_","class", "order","family")],
+                       function(x){x=="Not assigned"}))!=0)
+
+Spore_data2 <- Spore_data2[-nta, ]
+
+nta<-
+  which(rowSums(sapply(Spore_data2[,c("phylum_","class", "order","family")],function(x){x=="Incertae sedis"}))!=0)
+
+Spore_data2 <- Spore_data2[-nta, ]
+
+Spore_data2 <- Spore_data2[complete.cases(Spore_data2), ]
+
+
+#Using the species from which we have spore data (many more than above)
+frm <- ~phylum_/class/order/family/genus/names_to_use
+
+# tax_tree2 <- as.phylo(frm, data = Spore_data2 %>%
+#                  mutate_at(c("phylum_","class", "order",
+#                              "family","genus","names_to_use"),as.factor))
+# 
+# 
+# tax_tree2<-multi2di(tax_tree2)
+# is.binary(tax_tree2)
+# 
+# #Here what I am doing is giving the same length to all edges
+# tax_tree2$edge.length<-rep(1, nrow(tax_tree2$edge))
+# 
+# saveRDS(tax_tree2, "tax_tree2.RDS")
+
+tax_tree2 <- readRDS("tax_tree2.RDS")
+
+```
+
+
+
+
+# About the datasets
+
+There are 4 datasets with fungal data:
+
+1. AllFungi: contains all info on the names and taxonomy used (the source of taxonomy, which is mostly CoL), the descriptions id, the spore types and the spore names (conidia, chlamydospores, basidiospores, etc). This dataset is basically the result of the assembly of text mining all the descriptions in Mycobank.
+
+2. Spore_data: It contains simplified information on spore dimensions for all fungi. That is, I summarized entries repeated because different descriptions ID and/or species having different names. I also summarized the sporeName to only considers 4 spore type categories as we discuss in the manuscript (meiosproes, mitospores, multinucleate sexual and multinucleate asexual spores).
+
+3. "Spore_functions"  contains all the info as in Spore_data plus functional data (if any). For species without functional data, the entries have NAs
+
+4. To_Analysis: It contians information for the subset of species for which we have both spore data (spore data from Spore_data) and functional data
+
+
+# Statistical analysis
+
+
+
+Counting how much information we have
+```{r}
+#unique species names collected through data assembly
+length(unique(AllFungi$base_name))
+
+#unique species names obtained only through text mining from Mycobank
+length(unique(AllFungi$base_name[which(AllFungi$source_base_name=="Mycobank")]))
+
+#unique species names complemented by other sources
+length(
+  unique(AllFungi$base_name[which(AllFungi$source_base_name!="Mycobank")])[-which(
+    unique(AllFungi$base_name[which(AllFungi$source_base_name!="Mycobank")])%in%unique(AllFungi$base_name[which(AllFungi$source_base_name=="Mycobank")])
+  )]
+  
+  
+)
+
+#unique accepted names after correcting for taxonomy in the Catalogue of Life (accessed on December 2019)
+length(unique(AllFungi$names_to_use))
+
+
+#unique accepted names for which we have functional trait data
+length(unique(To_Analysis$names_to_use))
+
+length(unique(To_Analysis$names_to_use))/length(unique(AllFungi$names_to_use))
+
+```
+
+
+
+# Differences among spore types
+
+AM spores vs other asexual spores
+```{r}
+library(lme4)
+library(performance)
+
+#Li dataset
+
+dat2 <- Li_tree_names[which(Li_tree_names$SporeType=="Mitospores"|
+                         Li_tree_names$SporeType=="Multinucleate asexual spores"), ]
+
+dat2 <- dat2[-which(dat2$orginal_tree_names == "Mucor_indicus"|
+                         dat2$orginal_tree_names == "Mucor_racemosus"|
+                           dat2$orginal_tree_names == "Rhizopus_azygosporus"), ]
+
+rownames(dat2) <- dat2$orginal_tree_names
+
+AM_vs_Mito_Li<-
+  phylolm(log10(SporeVolume) ~ SporeType,
+          data = dat2,
+          phy = Li_tree, model = "lambda")
+
+rm(dat2)
+
+#Cladogram dataset
+
+dat1<-Spore_data[which(Spore_data$SporeType=="Mitospores"|
+                         Spore_data$SporeType=="Multinucleate asexual spores"),]
+
+dat1<-dat1[-grep("Zygomy",dat1$phylum),]
+rownames(dat1)<-dat1$names_to_use
+
+AM_vs_Mito<-
+phylolm(log10(SporeVolume)~SporeType,
+        phy = tax_tree2,
+        model = "lambda",
+        data = dat1)
+
+Simple_AM_vs_Mito<-
+lm(log10(SporeVolume)~SporeType,
+        #phy = tree_Spore_data,
+        #model = "lambda",
+        data = dat1)
+
+```
+
+Comparisons made with Li subset
+```{r}
+summary(AM_vs_Mito_Li)
+```
+
+Comparison made with cladograms
+```{r}
+summary(AM_vs_Mito)
+```
+
+No correction at all
+```{r}
+summary(Simple_AM_vs_Mito)
+```
+
+In this case AM Spores are 3.5 order of magnitude larger than mitospores. A result that is consistent in all models
+
+
+AM spores vs sexual spores
+
+```{r}
+#AM_vs_Meiospores
+dat2<-Li_tree_names[which(Li_tree_names$SporeType=="Meiospores"|
+                         Li_tree_names$SporeType=="Multinucleate asexual spores"),]
+
+rownames(dat2)<-dat2$orginal_tree_names
+
+AM_vs_Meio_Li<-
+  phylolm(log10(SporeVolume) ~ SporeType,
+          data = dat2,
+         
+          phy = Li_tree, model = "lambda")
+
+rm(dat2)
+
+#cladogram
+dat1<-Spore_data[which(Spore_data$SporeType=="Meiospores"|
+                         Spore_data$SporeType=="Multinucleate asexual spores"),]
+
+dat1<-dat1[-grep("Zygomy",dat1$phylum),]
+rownames(dat1)<-dat1$names_to_use
+
+# pruned.tree_1<-drop.tip(tree_Spore_data,
+#                 tree_Spore_data$tip.label[!tree_Spore_data$tip.label%in%dat1$names_to_use])
+
+AM_vs_Meio<-
+phylolm(log10(SporeVolume)~SporeType,
+        phy = tax_tree2,
+        model = "lambda",
+        data = dat1)
+
+
+Simple_AM_vs_Meio<-
+lm(log10(SporeVolume)~SporeType,
+        #phy = tree_Spore_data,
+        #model = "lambda",
+        data = dat1)
+#summary(Simple_AM_vs_Meio)
+```
+
+Comparison using the Li subset
+```{r}
+summary(AM_vs_Meio_Li)
+```
+
+Comparison using the cladogram
+```{r}
+summary(AM_vs_Meio)
+```
+
+Not incorporating phylogeny
+```{r}
+summary(Simple_AM_vs_Meio)
+```
+
+
+Comparisons with Zygos
+
+```{r}
+##AM_vs_Multinucleate sexual (zygo ones)
+
+dat2<-Li_tree_names[grep("Zygomy|Glomero",Li_tree_names$phylum),]
+
+dat2<-dat2[-which(grepl("Zygomy",dat2$phylum)&
+                         dat2$SporeType=="Mitospores"),]
+
+dat2$SporeType[which(dat2$SporeType=="Multinucleate sexual spores")]<-"A_Zygo spores"
+dat2$SporeType[which(dat2$SporeType=="Multinucleate asexual spores")]<-"B_AM spores"
+
+rownames(dat2)<-dat2$orginal_tree_names
+
+#####
+
+dat1<-Spore_data[grep("Zygomy|Glomero",Spore_data$phylum),]
+dat1<-dat1[-which(dat1$SporeType=="Mitospores"),]
+
+dat1$SporeType[grep("Zygomy",dat1$phylum)]<-"A_Zygo spores"
+dat1$SporeType[grep("Glomero",dat1$phylum)]<-"B_AM spores"
+
+dat1<-dat1[-which(duplicated(dat1$names_to_use)),]
+
+rownames(dat1)<-dat1$names_to_use
+
+
+# pruned.tree_1<-drop.tip(tree_Spore_data,
+#                 tree_Spore_data$tip.label[!tree_Spore_data$tip.label%in%dat1$names_to_use])
+
+AM_vs_ZygoS_Li<-
+phylolm(log10(SporeVolume)~SporeType,
+        phy = Li_tree,
+        model = "lambda",
+        data = dat2)
+
+AM_vs_ZygoS<-
+phylolm(log10(SporeVolume)~SporeType,
+        phy = tax_tree2,
+        model = "lambda",
+        data = dat1)
+
+Simple_AM_vs_ZygoS<-
+lm(log10(SporeVolume)~SporeType,
+        #phy = tree_Spore_data,
+        #model = "lambda",
+        data = dat1)
+
+```
+
+
+```{r}
+summary(AM_vs_ZygoS_Li)
+```
+
+with the cladograms
+```{r}
+summary(AM_vs_ZygoS)
+```
+
+without phylogenetic corrections
+```{r}
+summary(Simple_AM_vs_ZygoS)
+```
+
+
+
+Basidiospores vs Ascospores
+
+```{r}
+meiospores<-Li_tree_names[which(Li_tree_names$SporeType=="Meiospores"),]
+
+meiospores$Type<-NA
+meiospores$Type[grep("Asco",meiospores$phylum)]<-"ascospores"
+meiospores$Type[grep("Basidio",meiospores$phylum)]<-"basidiospores"
+
+rownames(meiospores)<-meiospores$orginal_tree_names
+
+asco_vs_basidio_Li<-
+phylolm(log10(SporeVolume)~Type,
+        phy = Li_tree,
+        model = "lambda",
+        data = meiospores);rm(meiospores)
+
+
+
+dat1<-Spore_data[which(Spore_data$SporeType=="Meiospores"),]
+
+dat1$Type<-NA
+dat1$Type[grep("Asco",dat1$phylum)]<-"ascospores"
+dat1$Type[grep("Basidio",dat1$phylum)]<-"basidiospores"
+
+rownames(dat1)<-dat1$names_to_use
+
+asco_vs_basidio<-
+phylolm(log10(SporeVolume)~Type,
+        phy = tax_tree2,
+        model = "lambda",
+        data = dat1)
+
+
+asco_vs_basidio_simple<-
+lm(log10(SporeVolume)~Type,
+        #phy = tree_Spore_data,
+        #model = "lambda",
+        data = dat1);rm(dat1)
+```
+
+Comparison made with the Li subset
+```{r}
+summary(asco_vs_basidio_Li)
+```
+
+Comparison made with the cladograms
+```{r}
+summary(asco_vs_basidio)
+```
+
+Comparisons without incorporating phylogeny
+```{r}
+summary(asco_vs_basidio_simple)
+```
+
+
+## Question 1: Does spore size co-varies with functional groups? and does the size of the spore is bigger in plant associated fungi with obligate lifestyles compared to faculative lifestyles
+
+
+Running the code below produces tables S3, S4 and S5.
+The tables are stored in the folder model_outputs of this r project.
+
+```{r, warning = FALSE}
+
+source("analysis_forNM_March23.R")
+
+# Fix the entries with double "Plant pathogen" and also the two categories for necrotrophs
+
+```
+
+
+
+# 3.Determinig the relative importance of climate vs life style in explaining interpecific spore variation 
+
+First with the Li tree
+
+
+```{r}
+# download file with climate data per species, created in 'miseq/scripts/geoextent_brm_host_modelfit.R'
+if(!file.exists('miseq')) dir.create('miseq')
+if(!file.exists('miseq/output')) dir.create('miseq/output')
+# if(!file.exists('miseq/output/df_species_noPrimers.csv')) {
+#   download.file('https://cloudstor.aarnet.edu.au/plus/s/eYepf1maC2xlUml/download',
+#                 'miseq/output/df_species_noPrimers.csv')
+# }
+
+
+dat <- read_csv('miseq/output/df_species_noPrimers.csv')
+dat$orginal_tree_names<-gsub(' ', '_', dat$Species)
+
+trial1<-left_join(
+  Li_tree_names[, c("orginal_tree_names","SporeType","SporeVolume",
+                      "simpleFunct","Life_style")],
+  dat %>%
+    select(orginal_tree_names, ends_with('mean'), n_samples_env))
+
+trial1 <- trial1[complete.cases(trial1),]
+
+# this is weird that there are species without assignments
+trial1 <- trial1 %>% 
+  #filter(!order == 'Not assigned') %>% 
+  mutate(Life_style = recode(Life_style, Plant = "Facultative association"), 
+         Life_style = recode(Life_style, "B_Opportunistic association" = "AFree living"), #Just added this
+         Life_style = recode(Life_style, "Facultative association" = "Symbiotic"), 
+         Life_style = recode(Life_style, "Obligate association" = "Symbiotic"), 
+         simpleFunct = recode(simpleFunct, "Human" = "A_Saprotroph"),
+         Life_style = ordered(Life_style))#, 
+         # Life_style = poly(as.numeric(Life_style, 1)))
+
+# Selecting only plant associated fungi and sapro
+trial1 <- trial1[grep("Sapro|Plant", trial1$simpleFunct), ]
+trial1 <- droplevels(trial1)
+
+#Removing species that have multiple spore types
+dobles <- trial1$orginal_tree_names[which(duplicated(trial1$orginal_tree_names))]
+
+trial1 <- trial1[-which(trial1$orginal_tree_names%in%dobles), ]
+
+trial1<-
+trial1 %>%#filter(!grepl("Multi",SporeType)) %>%
+  #filter(grepl("Meio", SporeType)) %>% 
+                 mutate_at(c("mat_mean", "map_mean", "seasonality_t_mean", 
+                             "seasonality_p_mean", "maxsrad_mean","minvapr_mean"),scale)
+
+rownames(trial1)<-trial1$orginal_tree_names
+
+# pruned.tree_trial1<-drop.tip(Li_tree,
+#                 Li_tree$tip.label[!Li_tree$tip.label%in%trial1$orginal_tree_names])
+
+
+m_all <- phylolm(log10(SporeVolume) ~ Life_style + mat_mean + map_mean + seasonality_t_mean + seasonality_p_mean + maxsrad_mean + minvapr_mean+ SporeType,
+               phy = Li_tree,
+               model = "lambda",
+               data = trial1)
+  
+m_no_life_style <- phylolm(log10(SporeVolume) ~ #Life_style + 
+               mat_mean + map_mean + seasonality_t_mean + seasonality_p_mean + maxsrad_mean + minvapr_mean+ SporeType,
+               phy = Li_tree,
+               model = "lambda",
+               data=trial1)
+  
+m_no_mat_mean <- phylolm(log10(SporeVolume) ~ Life_style + 
+               #mat_mean + 
+                 map_mean + 
+                 seasonality_t_mean + 
+                 seasonality_p_mean + 
+                 maxsrad_mean + 
+                 minvapr_mean+
+               SporeType,
+               phy = Li_tree,
+               model = "lambda",
+               data=trial1)
+  
+  
+  m_no_map_mean <- phylolm(log10(SporeVolume) ~ Life_style + 
+                 mat_mean + 
+                 #map_mean + 
+                 seasonality_t_mean + 
+                 seasonality_p_mean + 
+                 maxsrad_mean + 
+                 minvapr_mean+
+               SporeType,
+               phy = Li_tree,
+               model = "lambda",
+               data=trial1)
+  
+  m_no_seasonality_t_mean <- phylolm(log10(SporeVolume) ~ Life_style + 
+                 mat_mean + 
+                 map_mean + 
+                 #seasonality_t_mean + 
+                 seasonality_p_mean + 
+                 maxsrad_mean + 
+                 minvapr_mean+
+                   SporeType,
+               phy = Li_tree,
+               model = "lambda",
+               data=trial1)
+  
+  m_no_seasonality_p_mean <- phylolm(log10(SporeVolume) ~ Life_style + 
+                 mat_mean + 
+                 map_mean + 
+                 seasonality_t_mean + 
+                 #seasonality_p_mean + 
+                 maxsrad_mean + 
+                 minvapr_mean+
+               SporeType,  
+               phy = Li_tree,
+               model = "lambda",
+               data=trial1)
+  
+  m_no_maxsrad_mean <- phylolm(log10(SporeVolume) ~ Life_style + 
+                 mat_mean + 
+                 map_mean + 
+                 seasonality_t_mean + 
+                 seasonality_p_mean + 
+                 #maxsrad_mean + 
+                 minvapr_mean+
+               SporeType,
+               phy = Li_tree,
+               model = "lambda",
+               data=trial1)
+  
+  m_no_minvapr_mean <- phylolm(log10(SporeVolume) ~ Life_style + 
+                 mat_mean + 
+                 map_mean + 
+                 seasonality_t_mean + 
+                 seasonality_p_mean + 
+                 maxsrad_mean + 
+                 #minvapr_mean+
+               SporeType,
+               phy = Li_tree,
+               model = "lambda",
+               data=trial1)
+  
+  
+  
+  modelos<-list(m_all,m_no_life_style,
+                m_no_mat_mean,m_no_map_mean,
+                m_no_seasonality_t_mean,m_no_seasonality_p_mean,
+                m_no_maxsrad_mean,m_no_minvapr_mean)
+  names(modelos)<-c("m_all","m_no_life_style",
+                "m_no_mat_mean","m_no_map_mean",
+                "m_no_seasonality_t_mean","m_no_seasonality_p_mean",
+                "m_no_maxsrad_mean","m_no_minvapr_mean")
+  
+  resultados<-
+  do.call("rbind",
+  lapply(modelos, function(x){#y<-r2_nakagawa(x)
+  data.frame(adj.r.squared=summary(x)$adj.r.squared,
+             #R2_fixed=y$R2_marginal,
+    df=logLik.phylolm(x)[2],         
+    Log_likelihood=logLik.phylolm(x)[1],
+    AIC=AIC.phylolm(x),
+    dataset = paste(x$call$phy, " (","n=", x$n, ")", sep = "") )} ))
+  
+  resultados$dAIC<-resultados$AIC-resultados$AIC[1]
+  resultados$Model<-rownames(resultados);rownames(resultados)<-NULL
+  resultados<-resultados[,c("Model","adj.r.squared", "logLik",
+                            "AIC", "dAIC", "dataset")]
+  resultados_Li_tree<-resultados
+  
+  
+```
+
+With taxonomy tree
+
+```{r, echo=FALSE,message=FALSE,warning=FALSE}
+dat$names_to_use<-gsub("_"," ",dat$Species)
+
+#This worked for the dataset Jeff sent me before Nov 2022
+# trial<-left_join(dat %>% 
+#                   select(names_to_use, host.assoc, log10.sporeVolume, log10.sporeAspectRatio, ends_with('mean'), n_samples_env), 
+#                  To_Analysis[,c("names_to_use","SporeType","SporeVolume","simpleFunct","Life_style")])
+
+#This one woks for the datset Jeff sent me on Nov 2022
+trial<-left_join(
+dat %>%
+    select(names_to_use, ends_with('mean'), n_samples_env), 
+                 To_Analysis[,c("names_to_use","SporeType","SporeVolume","simpleFunct","Life_style")])
+
+trial <-left_join(trial, Spore_data2)
+
+trial<-trial[complete.cases(trial),]
+trial<-trial %>% 
+  mutate(Life_style = recode(Life_style, Plant = "Facultative association"), 
+         Life_style = recode(Life_style, "B_Opportunistic association" = "AFree living"),
+         simpleFunct = recode(simpleFunct, "Human" = "A_Saprotroph"),
+         Life_style = ordered(Life_style))
+
+trial<-
+trial %>%#filter(!grepl("Multi",SporeType)) %>%
+                 mutate_at(c("mat_mean", "map_mean", "seasonality_t_mean", 
+                             "seasonality_p_mean", "maxsrad_mean","minvapr_mean"),scale)
+
+# Selecting only plant associated fungi and sapro
+trial <- trial[grep("Sapro|Plant", trial$simpleFunct), ]
+trial <- droplevels(trial)
+
+
+#Removing species that produced multiple spores
+dobles <- trial$names_to_use[which(duplicated(trial$names_to_use))]
+trial <- trial[-which(trial$names_to_use%in%dobles), ]
+rownames(trial) <- trial$names_to_use
+
+#2. One for the geographic data, that is for dat
+frm <- ~phylum_/class/order/family/genus/names_to_use
+
+tree_trial <- as.phylo(frm, data = trial %>%
+                 mutate_at(c("phylum_","class", "order",
+                             "family","genus","names_to_use"),as.factor))
+is.binary.tree(tree_trial)
+
+tree_trial<-multi2di(tree_trial)
+is.binary.tree(tree_trial)
+tree_trial$edge.length<-rep(1, nrow(tree_trial$edge))
+
+#plot(tree_trial,cex = 0.01)#Now this work
+
+m_all <- phylolm(log10(SporeVolume) ~ Life_style + mat_mean + map_mean + seasonality_t_mean + seasonality_p_mean + maxsrad_mean + minvapr_mean+ SporeType,
+               phy = tree_trial,
+               model = "lambda",
+               data=trial)
+  
+m_no_life_style <- phylolm(log10(SporeVolume) ~ #Life_style + 
+               mat_mean + map_mean + seasonality_t_mean + seasonality_p_mean + maxsrad_mean + minvapr_mean+ SporeType,
+               phy = tree_trial,
+               model = "lambda",
+               data=trial)
+  
+m_no_mat_mean <- phylolm(log10(SporeVolume) ~ Life_style + 
+               #mat_mean + 
+                 map_mean + 
+                 seasonality_t_mean + 
+                 seasonality_p_mean + 
+                 maxsrad_mean + 
+                 minvapr_mean+
+               SporeType,
+               phy = tree_trial,
+               model = "lambda",
+               data=trial)
+  
+  
+  m_no_map_mean <- phylolm(log10(SporeVolume) ~ Life_style + 
+                 mat_mean + 
+                 #map_mean + 
+                 seasonality_t_mean + 
+                 seasonality_p_mean + 
+                 maxsrad_mean + 
+                 minvapr_mean+
+               SporeType,
+               phy = tree_trial,
+               model = "lambda",
+               data=trial)
+  
+  m_no_seasonality_t_mean <- phylolm(log10(SporeVolume) ~ Life_style + 
+                 mat_mean + 
+                 map_mean + 
+                 #seasonality_t_mean + 
+                 seasonality_p_mean + 
+                 maxsrad_mean + 
+                 minvapr_mean+
+                   SporeType,
+               phy = tree_trial,
+               model = "lambda",
+               data=trial)
+  
+  m_no_seasonality_p_mean <- phylolm(log10(SporeVolume) ~ Life_style + 
+                 mat_mean + 
+                 map_mean + 
+                 seasonality_t_mean + 
+                 #seasonality_p_mean + 
+                 maxsrad_mean + 
+                 minvapr_mean+
+               SporeType,  
+               phy = tree_trial,
+               model = "lambda",
+               data=trial)
+  
+  m_no_maxsrad_mean <- phylolm(log10(SporeVolume) ~ Life_style + 
+                 mat_mean + 
+                 map_mean + 
+                 seasonality_t_mean + 
+                 seasonality_p_mean + 
+                 #maxsrad_mean + 
+                 minvapr_mean+
+               SporeType,
+              phy = tree_trial,
+               model = "lambda",
+               data=trial)
+  
+  m_no_minvapr_mean <- phylolm(log10(SporeVolume) ~ Life_style + 
+                 mat_mean + 
+                 map_mean + 
+                 seasonality_t_mean + 
+                 seasonality_p_mean + 
+                 maxsrad_mean + 
+                 #minvapr_mean+
+               SporeType,
+               phy = tree_trial,
+               model = "lambda",
+               data=trial)
+  
+  
+  
+  modelos<-list(m_all,m_no_life_style,
+                m_no_mat_mean,m_no_map_mean,
+                m_no_seasonality_t_mean,m_no_seasonality_p_mean,
+                m_no_maxsrad_mean,m_no_minvapr_mean)
+  names(modelos)<-c("m_all","m_no_life_style",
+                "m_no_mat_mean","m_no_map_mean",
+                "m_no_seasonality_t_mean","m_no_seasonality_p_mean",
+                "m_no_maxsrad_mean","m_no_minvapr_mean")
+  
+  resultados<-
+  do.call("rbind",
+  lapply(modelos, function(x){#y<-r2_nakagawa(x)
+  data.frame(adj.r.squared=summary(x)$adj.r.squared,
+             #R2_fixed=y$R2_marginal,
+    df=logLik.phylolm(x)[2],         
+    Log_likelihood=logLik.phylolm(x)[1],
+    AIC=AIC.phylolm(x),
+    dataset = paste(x$call$phy, " (","n=", x$n, ")", sep = "") )} ))
+  
+  resultados$dAIC<-resultados$AIC-resultados$AIC[1]
+  resultados$Model<-rownames(resultados);rownames(resultados)<-NULL
+  resultados<-resultados[,c("Model","adj.r.squared", "logLik",
+                            "AIC", "dAIC", "dataset")]
+  
+  resultados_tax_tree<-resultados;rm(resultados)
+  
+```
+
+Based on the Li subset
+```{r}
+resultados_Li_tree
+```
+
+
+Based on the cladograms
+```{r}
+resultados_tax_tree
+```
+
+
+```{r}
+
+resultados_all <-
+bind_rows(resultados_Li_tree, resultados_tax_tree)
+
+m <- c(rbind(c(1:8),c(9:16)))
+
+resultados_all <- resultados_all[m, ]
+
+resultados_all <- rapply(resultados_all, classes = "numeric", how = "replace",
+                         function(x){round(x, 2)})
+
+resultados_all$Model <- c("All variables"," ", "(-) Symbiotic lifestyle", " ",
+                          "(-) mean annual temperature", " ", "(-) mean annual precipitation", " ",
+                          "(-) Temperature seasonality", " ", "(-) Precipitation seasonality", " ",
+                          "(-) Maximum solar radiation", " ", "(-) Minimum vapor pressure", " ")
+
+resultados_all$dataset <- gsub("Li_tree", "Model 1", resultados_all$dataset)
+resultados_all$dataset <- gsub("tree_trial", "Model 2", resultados_all$dataset)
+
+write.table(resultados_all,
+          "model_outputs/table_1.txt", sep =";",
+          row.names = F)
+
+```
+
+
+
+
+# Figures
+
+## Figure 1 (further modified in inkspace)
+
+### Figure 1 Phylogenetic Tree
+
+Genome tree (Li tree)
+```{r}
+# This is the version done with the genome tree tree (modified by Carlos)
+
+library(ape)
+
+# if (!require("BiocManager", quietly = TRUE))
+#     install.packages("BiocManager")
+# 
+# BiocManager::install("ggtree")
+
+library(ggtree)
+
+#devtools::install_github("ropenscilabs/datastorr")
+#devtools::install_github("wcornwell/taxonlookup")
+
+library(taxonlookup)
+
+# The Li tree contains 1644 fungi plus 28 sps of outgroup (i.e. not fungi)
+tt <- Li_tree
+
+# This tree contains does not contain the outgroups (28 sps), that is, it only contains
+# fungi
+Li_tree2<-read.tree("1644taxa_290genes_bb_1_root.tre")
+outgroups <- which(!Li_tree$tip.label%in%Li_tree2$tip.label)
+
+#Li_tree$tip.label[outgroups] # Below the names just in case
+
+# Root in the tree
+tt <- root(tt, outgroup = outgroups, resolve.root = T)#; rm(Li_tree2)
+# pdf("checking_tree")
+# plot(tt, cex = 0.5)
+# dev.off()
+#
+#tt <- root(tt, outgroup = "Ichthyophonus_hoferi")#; rm(Li_tree2)
+
+#read in genus in order lookup
+only_one_genera_per_order <- Li_tree_names[-which(duplicated(Li_tree_names$order)),
+                        c("orginal_tree_names", "order")]
+
+names(only_one_genera_per_order)[1] <- "genus"
+
+#removing the "incertae sedis" order
+
+only_one_genera_per_order <- only_one_genera_per_order[-grep("sedis",                                                          only_one_genera_per_order$order), ]
+
+dropped.tree2 <- drop.tip(tt,tt$tip.label[which(!tt$tip.label %in% only_one_genera_per_order$genus)])
+
+# Replace the names of the genus with the name of the orders
+dropped.tree2$tip.label <- only_one_genera_per_order$order[match(dropped.tree2$tip.label,
+                                        only_one_genera_per_order$genus)]
+```
+
+These are the 28 outgroups in the Li tree: 
+
+[1] "Ichthyophonus_hoferi"             "Creolimax_fragrantissima"        
+ [3] "Sphaeroforma_sirkka"              "Sphaeroforma_arctica"            
+ [5] "Ichthyosporea_sp._XGB_2017a"      "Strigamia_maritima"              
+ [7] "Ixodes_scapularis"                "Daphnia_pulex"                   
+ [9] "Drosophila_melanogaster"          "Octopus_bimaculoides"            
+[11] "Lottia_gigantea"                  "Lingula_anatina"                 
+[13] "Capitella_teleta"                 "Helobdella_robusta"              
+[15] "Branchiostoma_lanceolatum"        "Mus_musculus"                    
+[17] "Ciona_intestinalis"               "Strongylocentrotus_purpuratus"   
+[19] "Trichoplax_adhaerens"             "Nematostella_vectensis"          
+[21] "Amphimedon_queenslandica"         "Mnemiopsis_leidyi"               
+[23] "Salpingoeca_rosetta"              "Monosiga_brevicollis_MX1"        
+[25] "Capsaspora_owczarzaki_ATCC_30864" "Corallochytrium_limacisporum"    
+[27] "Fonticula_alba"                   "Fonticula_like_sp_SCN_57_25"     
+
+
+
+```{r}
+#read in spore data and calculate size and shape variables
+matched_data <- filter(Spore_functions,order%in%dropped.tree2$tip.label)
+matched_data <- ungroup(matched_data)
+matched_data$log.length <- log10(matched_data$spore_length)
+matched_data$log_spore_volume <- log10((matched_data$spore_width^2)*matched_data$spore_length*(pi/6))
+matched_data$length_divided_by_width <- log10(matched_data$spore_length/matched_data$spore_width)
+
+
+#check tree
+#dropped.tree2$tip.label %in% matched_data$order
+
+#relabel to ggtree convention
+matched_data$id <- matched_data$order
+
+#drop not assigned taxa; there are multiple spots on tree with non assigned taxa
+matched_data <- filter(matched_data,order!="Not assigned")
+dropped.tree2 <- drop.tip(dropped.tree2,"Not assigned")
+
+#select only necessary data
+#temp<-select(match2,id,log_spore_area,SporeName,length_divided_by_width)
+temp <- select(matched_data,
+             id, phylum,log_spore_volume, SporeType, length_divided_by_width)
+
+# summarize data # My modification
+sumbox<-temp %>%
+  group_by(id, phylum,SporeType) %>%
+  summarise(
+    n=n(),
+    meanV=mean(log_spore_volume),
+    meanQ=mean(length_divided_by_width),
+    sdV=sd(log_spore_volume),
+    sdQ=sd(length_divided_by_width)
+  ) %>%
+  mutate(seV=sdV/sqrt(n)) %>%
+  mutate(seQ=sdQ/sqrt(n))
+
+#sumbox[sumbox$n==1,][,c("meanV","meanQ","sdV","sdQ","seV","seQ")]<-NA
+#Orders for which we only have 1 species
+just_one<-
+  temp %>% 
+  group_by(id) %>% 
+  count() %>% 
+  filter(n==1)
+#These are the Basidiobolales and the Dimargitales
+
+dropped.tree2<-drop.tip(dropped.tree2,dropped.tree2$tip.label[match(just_one$id, 
+                                                                    dropped.tree2$tip.label)])
+
+sumbox<-sumbox[-which(sumbox$n==1),]
+
+plot.phylo(dropped.tree2, use.edge.length = F, cex = 0.3, no.margin = T)
+
+# Saved version without lables (labels are given in the panel with the symbioses symbols
+# they match!)
+pdf("Figures/Figure_1/Figure1_phylo_tree.pdf",
+   width = 4.43,
+    height = 14.5)
+plot.phylo(dropped.tree2, use.edge.length = F, cex = 0.3, no.margin = T,
+           show.tip.label = FALSE)
+
+dev.off()
+
+```
+
+
+Figure 1. Panel C: shapes for each level of symbiosis
+```{r}
+en_orden <-
+c("Metchnikovellida", "Meiodihaplophasida", "Dissociodihaplophasida", "Glugeida",
+"Blastocladiales", "Neocallimastigales", "Spizellomycetales", "Chytridiales",
+"Rhizophydiales", "Zoopagales", "Entomophthorales", "Dimargaritales","Kickxellales",
+"Harpellales", "Basidiobolales", "Mortierellales", "Diversisporales", "Glomerales",
+"Endogonales", "Umbelopsidales", "Mucorales", "Pucciniales", "Microbotryales",
+"Georgefischeriales", "Tilletiales", "Ustilaginales", "Microstromatales",
+"Exobasidiales", "Ceraceosorales", "Wallemiales", "Tremellales", "Trichosporonales",
+"Dacrymycetales", "Cantharellales", "Auriculariales", "Geastrales", "Gomphales",
+"Trechisporales", "Hymenochaetales", "Jaapiales",
+"Gloeophyllales", "Russulales", "Thelephorales", "Polyporales", "Boletales",
+"Atheliales", "Agaricales", "Corticiales", "Taphrinales", "Saccharomycetales",
+"Orbiliales", "Pezizales", "Helotiales", "Erysiphales", "Amphisphaeriales",
+"Xylariales", "Microascales", "Chaetosphaeriales", "Hypocreales", "Glomerellales",
+"Coniochaetales", "Sordariales", "Togniniales", "Diaporthales",
+"Ophiostomatales", "Magnaporthales", "Arthoniales", "Dothideales", "Myriangiales",
+"Mycosphaerellales", "Capnodiales", "Venturiales", "Botryosphaeriales",
+"Hysteriales", "Patellariales", "Pleosporales", "Mytilinidiales", "Umbilicariales",
+"Lecanorales", "Phaeomoniellales", "Verrucariales", "Chaetothyriales",
+"Ascosphaerales", "Onygenales", "Eurotiales")
+
+en_orden <- en_orden[85:1]
+
+
+nombres <-   
+left_join(data.frame(order = en_orden),
+Spore_functions %>% 
+  filter(order%in%dropped.tree2$tip.label) %>%
+  group_by(order) %>% 
+  count())
+
+#nombres <- paste(nombres$order, paste("(", "n=", nombres$n, ")", sep = ""), sep = " ")
+
+#parte <- paste("(", "n=", nombres$n, ")", sep = "")
+ID <- paste(nombres$order,
+                  paste("(", "n=", nombres$n, ")", sep = ""),
+                  sep = " ")
+
+
+
+pdf("Figures/Figure_1/Figure1_symbioses_symbols.pdf",
+   width = 3.64,
+    height = 14.75)
+
+Spore_functions %>% 
+  filter(order%in%dropped.tree2$tip.label) %>%
+  mutate(Life_style = recode(Life_style, Plant = "Facultative_association")) %>% 
+  mutate(Life_style = gsub(" ", "_", Life_style)) %>% 
+  filter(Life_style=="AFree_living"|
+           Life_style=="Facultative_association"|
+           Life_style=="B_Opportunistic_association"|
+           Life_style=="Obligate_association") %>%
+  mutate(Life_style = recode(Life_style, B_Opportunistic_association = "Asymbiotic")) %>% 
+  mutate(Life_style = recode(Life_style, AFree_living = "Asymbiotic")) %>%
+  mutate(Life_style = recode(Life_style, Facultative_association = "Facultative\nsymbiosis")) %>% 
+  mutate(Life_style = recode(Life_style, Obligate_association = "Obligate\nsymbiosis")) %>%
+  group_by(phylum, order, Life_style) %>% 
+  summarise(n = n()) %>% 
+  #filter(n > 1) %>%
+  mutate(order = factor(order, levels = en_orden)) %>% 
+  ggplot()+
+  aes(x=Life_style,y= order,shape=Life_style) +
+  geom_point(size = 4) +
+  scale_shape_manual(values = c(15, 17, 16)) +
+  scale_x_discrete(position = "top", 
+                   breaks = c("Asymbiotic", "Facultative\nsymbiosis", "Obligate\nsymbiosis"),
+                   labels = c("Asymbiotic", "Facultative", "Obligate")) +
+  scale_y_discrete(breaks = en_orden,
+                   labels = ID) +
+  theme(panel.background = element_blank(),
+        axis.title = element_blank(),
+        axis.text.x = element_text(size= 15, angle = 45, hjust = 0, face = "bold", colour = "black"),
+        axis.ticks.y = element_blank(),
+        axis.text.y = element_text(hjust = 0, face = "italic", colour = "black"),
+        legend.text = element_text(size = 10),
+        legend.position = "none")
+
+dev.off()
+
+```
+
+
+
+Figure 1: Comparing spore size with that of seeds and eggs
+
+```{r}
+jpeg("Figures/Figure_1/Figure1_comparisons.jpeg",
+     width = 1212, height = 560)
+
+rbind(
+  AllFungi%>%
+        group_by(phylum,names_to_use,SporeName,Specific_sporeName)%>%
+      summarise_at(c("spore_length","spore_width","SporeArea","SporeVolume","Q_ratio"),mean) %>% 
+                          select(names_to_use,SporeVolume)%>%
+                          rename(offsrpingSize=SporeVolume)%>%
+                          #filter(good.names!="Glomus_tenue")%>%
+                          mutate(Taxa="Fungi")%>%
+                          mutate(offsrpingSize=offsrpingSize/((10000)^3)),#%>%
+                          #mutate(Organism="Microorganism"),
+                        
+                        kewData%>%
+                          select(species,value)%>%
+                          rename(names_to_use=species, offsrpingSize=value)%>%
+                          mutate(Taxa="Plants"),#%>%
+                          #mutate(Organism="Macroorganism"),
+                        BirdEgg%>%
+                          select(Species,Volume)%>%
+                          rename(names_to_use=Species,offsrpingSize=Volume)%>%
+                          mutate(Taxa="Birds"))%>%
+                      #mutate(Taxa=factor(Taxa,levels =c("Birds","Plants","Fungi"))) %>% 
+                      mutate(Taxa=factor(Taxa,levels = c("Fungi","Plants","Birds"))) %>% #For the coord flip version is better in this reverse order
+                          #mutate(Organism="Macroorganism"))%>%
+                    
+                    ggplot()+
+                    aes(Taxa,offsrpingSize)+
+                    geom_jitter(alpha=0.9,size=4,width = 0.3,color="#FD8D3C")+
+  #fe8d3ce6
+                    geom_violin(alpha=0.5,
+                          lwd=1,
+                          fill=NA)+
+                    #facet_grid(. ~ Organism, scales = "free")+
+                    scale_y_log10(labels = scales::trans_format("log10", scales::math_format(10^.x)))+
+                    labs(x="Offspring structure",y=expression("Offspring size as volume ("*c*"m³)"))+
+                    #scale_color_brewer(palette="Accent")+
+                    scale_x_discrete(labels=c("Birds" = "Birds\n(eggs)", "Plants"="Plants\n(seeds)","Fungi"="Fungi\n(spores)"))+
+  
+                      theme(title = element_text(size = 18),
+                      panel.background = element_blank(),
+                      panel.grid.major = element_line(size = 0.5, linetype = 'longdash',
+                                                      colour = "gray"),
+                      # panel.grid.minor = element_line(size = 0.5, linetype = 'longdash',
+                      #                                 colour = "gray"),
+                      axis.title.x=element_blank(),
+                      axis.text.x = element_text(size = 20),#,angle = 45,hjust = 1),
+                      axis.text.y = element_blank(),
+                      #axis.title.x = element_text(size = 20),
+                      axis.title.y = element_blank(),
+                      legend.position = "none")+
+  coord_flip()
+
+dev.off()
+
+```
+
+Figure 1 Heatmaps
+
+```{r}
+datos <- 
+Spore_functions %>% 
+  filter(order%in%dropped.tree2$tip.label) %>%
+  filter(names_to_use != "Minimedusa polyspora") %>% 
+  # mutate(Life_style = recode(Life_style, Plant = "Facultative_association")) %>% 
+  # mutate(Life_style = gsub(" ", "_", Life_style)) %>% 
+  # filter(Life_style=="AFree_living"|
+  #          Life_style=="Facultative_association"|
+  #          Life_style=="B_Opportunistic_association"|
+  #          Life_style=="Obligate_association") %>%
+  # mutate(Life_style = recode(Life_style, B_Opportunistic_association = "Asymbiotic")) %>% 
+  # mutate(Life_style = recode(Life_style, AFree_living = "Asymbiotic")) %>%
+  # mutate(Life_style = recode(Life_style, Facultative_association = "Facultative\nsymbiosis")) %>% 
+  # mutate(Life_style = recode(Life_style, Obligate_association = "Obligate\nsymbiosis")) %>%
+  group_by(order, SporeType) %>% 
+  summarise(meanV = mean(log10(SporeVolume)),
+            Vol_CV = sd(log10(SporeVolume))/mean(log10(SporeVolume))) %>% 
+  ungroup() %>% 
+  select(order, SporeType, meanV,Vol_CV) %>% 
+  pivot_wider(names_from = SporeType,values_from = c(meanV,Vol_CV))# %>% 
+  # mutate(order = factor(order, levels = en_orden)) %>% 
+  # ggplot() +
+  # geom_tile(aes(x=SporeType, y= order, fill=meanV)) +
+
+
+datos1 <-as.matrix(datos[,c( "meanV_Meiospores",#"sdV_Meiospores",
+                            "meanV_Mitospores",#"sdV_Mitospores",
+                            "meanV_Multinucleate sexual spores",
+                            "meanV_Multinucleate asexual spores")])#"sdV_Multinucleate asexual spores",
+                            #,"sdV_Multinucleate sexual spores"#,
+                                                        #)])
+rownames(datos1) <- datos$order
+datos1 <- datos1[match(en_orden,rownames(datos1)), ]
+
+datos2 <- as.matrix(datos[,c( "Vol_CV_Meiospores",
+                            "Vol_CV_Mitospores",
+                            "Vol_CV_Multinucleate sexual spores",
+                            "Vol_CV_Multinucleate asexual spores")])
+rownames(datos2) <- datos$order
+datos2 <- datos2[match(en_orden,rownames(datos2)), ]
+
+```
+
+
+
+```{r}
+library(RColorBrewer)
+coul<-colorRampPalette(brewer.pal(9, "Blues"))(100)
+#Volume
+
+#Saving using pdf() does not work well, so better click based with the name:
+
+#Saving using pdf() does not work well, so better click based with the name:
+#"Figures/Figure_1/Figure1_heatmaps_vol_mean.pdf", and dimensions:
+#   width = 16,
+#    height = 19)
+heatmap(datos1,Colv = NA, Rowv = NA,cexCol = 0.5,cexRow = 0.5, scale = "none", labRow = F, labCol = F, col=hcl.colors(12, "YlOrRd", rev = TRUE))
+
+legend(x="bottomright", legend=c("a", "b", "c","d","e"),
+       fill=hcl.colors(5, "YlOrRd", rev = TRUE)[5:1])
+#dev.off()
+
+```
+
+
+
+## Figure 2 and Table S8 (colors were modified manually in inkscape)
+
+
+Table S9. Number of unique species (accepted species names) for which we obtained per phylum, spore type and functional group.
+
+```{r}
+contando_grupos<-
+To_Analysis%>% 
+  #filter(!Life_style=="Fungi") %>%
+  #filter(!simpleFunct == "Animal") %>%
+  filter(!simpleFunct == "Ants") %>%
+  filter(!simpleFunct == "Nematode") %>%
+  filter(!simpleFunct == "Protist") %>%
+  filter(!simpleFunct == "Termite") %>%
+  filter(!simpleFunct == "Unknown") %>%
+  filter(!simpleFunct == "Algae") %>%
+  filter(!simpleFunct == "Rotifer") %>%
+  filter(!simpleFunct == "Plant mycorrhizal") %>% 
+  mutate(simpleFunct = recode(simpleFunct, Animal = "Animal Parasite")) %>% 
+  mutate(simpleFunct = recode(simpleFunct, Fungi = "Fungal Parasite")) %>% 
+  mutate(simpleFunct = recode(simpleFunct, Human = "Human Pathogen")) %>% 
+  #mutate(simpleFunct = recode(simpleFunct, A_Saprotroph = "Asymbiotic\n(Saprotroph)")) %>% 
+  filter(!grepl("Chytrid|Ergot|Mammal", simpleFunct, ignore.case = T)) %>% 
+  filter(!grepl("Multi", SporeType)) %>% 
+  filter(!(simpleFunct == "Plant Ectomycorrhizal"&SporeType == "Mitospores")) %>%
+  filter(!(simpleFunct == "Animal Parasite"&SporeType == "Meiospores")) %>% 
+  group_by(phylum, order, SporeType, simpleFunct) %>% 
+  summarise(n= n())
+
+write.table(contando_grupos,"model_outputs/contando_grupos.txt",
+            row.names = F,
+            sep = ";")
+```
+
+
+### Figure 2. Spore size along different lifestyles
+
+
+Preparing the dataset
+```{r}
+coloreando <- function(x,y){
+  
+  x$colores <- NA
+  x$colores[which(x$simpleFunct%in%y$names)] <- 
+    y$simpleFunct[match(x$simpleFunct[which(x$simpleFunct%in%y$names)],
+                        y$names)]
+  x}
+
+theme_1 <- theme(#panel.background = element_rect(fill = "gray95"),
+                 panel.background = element_blank(),
+                 panel.border = element_rect(fill = NA, size = 2),
+                 
+                 panel.grid.major.x = element_blank(),
+                 panel.grid.major.y = element_line(size = 0.5, linetype = 'solid',
+                                                   colour = "gray75"),
+                 
+                 panel.grid.minor.y = element_line(size = 0.5, linetype = 'dashed',
+                                                   colour = "gray75"),
+                 #text = element_text(family = "Times New Roman"),
+                 
+                 axis.title.y = element_text(size = 25),
+                 axis.title.x = element_blank(),
+                 axis.text.x = element_text(size = 25, angle = 45, hjust = 1),
+                 axis.text.y = element_text(size=20),
+                 strip.background = element_blank(),
+                 strip.text = element_text(size = 30, face = "bold"),
+                 legend.title = element_text(size= 25, face = "bold", colour = "black"),
+                 legend.text = element_text(size = 20),
+                 legend.title.align = 0.5,
+                 legend.position = "right",
+                 legend.key = element_blank())
+# Meiospores
+
+To_plot_ascos_basidios <- 
+  bind_rows(ascospores2, basidiospores2)
+To_plot_ascos_basidios <- cleaning_functions(To_plot_ascos_basidios)
+
+
+# Getting predicted values from the model with taxonomic tree
+predicted_ascos <- 
+  get_predicted(mod_tax_ascos, phy = "Ascomycota", mod = "Taxonomy tree")
+
+# keep doing it for the predicted values
+
+predicted_basidios <- 
+  get_predicted(mod_tax_basidios, phy = "Basidiomycota", mod = "Taxonomy tree")
+
+predicted_ascos_basidios <- bind_rows(predicted_ascos,
+                                      predicted_basidios)
+
+#predicted_ascos_basidios <- cleaning_functions(predicted_ascos_basidios)
+
+
+## Getting predicted values from the model with genome tree
+predicted_ascos_li <- 
+  get_predicted(mod_Li_ascos, phy = "Ascomycota", mod = "Genome tree")
+predicted_basidios_li <- 
+  get_predicted(mod_Li_basidios, phy = "Basidiomycota", mod = "Genome tree")
+
+predicted_ascos_basidios_li <- bind_rows(predicted_ascos_li,
+                                      predicted_basidios_li)
+
+#predicted_ascos_basidios_li <- cleaning_functions(predicted_ascos_basidios_li)
+
+# For Mitospores
+names(mitospores_zoo)[9] <- "names_to_use"
+mitospores_zoo$names_to_use <- gsub("_", " ", mitospores_zoo$names_to_use)
+
+names(mitospores_mic)[9] <- "names_to_use"
+mitospores_mic$names_to_use <- gsub("_", " ", mitospores_mic$names_to_use)
+
+To_plot_mitos <- bind_rows(mitospores_as2, mitospores_bas2,
+                           mitospores_zy2, mitospores_zoo,
+                           mitospores_mic)
+
+To_plot_mitos$mega <- "Non-Dykaria"
+To_plot_mitos$mega[which(To_plot_mitos$phylum=="Ascomycota")] <- "Ascomycota"
+To_plot_mitos$mega[which(To_plot_mitos$phylum=="Basidiomycota")] <- "Basidiomycota"
+
+To_plot_mitos$phylum[To_plot_mitos$phylum=="\"Zygomycetous fungi\""] <- "Zygomycetous\nfungi"
+To_plot_mitos$phylum[To_plot_mitos$phylum=="Zoopagomycota"] <- "Zygomycetous\nfungi"
+To_plot_mitos$phylum[To_plot_mitos$phylum=="Mucoromycota"] <- "Zygomycetous\nfungi"
+To_plot_mitos$phylum[To_plot_mitos$phylum=="Zygomycetous fungi"] <- "Zygomycetous\nfungi"
+
+# Zoosporic fungi
+To_plot_mitos$phylum[To_plot_mitos$phylum=="Blastocladiomycota"] <- "Zoosporic\nfungi"
+To_plot_mitos$phylum[To_plot_mitos$phylum=="Neocallimastigomycota"] <- "Zoosporic\nfungi"
+To_plot_mitos$phylum[To_plot_mitos$phylum=="Chytridiomycota"] <- "Zoosporic\nfungi"
+
+To_plot_mitos$Life_style <- gsub(" ", "_", To_plot_mitos$Life_style)
+
+To_plot_mitos <- cleaning_functions(To_plot_mitos)
+
+#getting predicted values
+predicted_mitos_as <- get_predicted(mod_tax_mitos_as, phy = "Ascomycota", mod = "Taxonomy tree")
+predicted_mitos_bas <- get_predicted(mod_tax_mitos_bas, phy = "Basidiomycota", mod = "Taxonomy tree")
+predicted_mitos_zy <- get_predicted(mod_tax_mitos_zy2, phy = "Zygomycetous\nfungi", mod = "Taxonomy tree")
+
+
+predicted_mitos_as$mega <- "Ascomycota"
+predicted_mitos_bas$mega <- "Basidiomycota"
+predicted_mitos_zy$mega <- "Non-Dykaria"
+
+predicted_mitos <- bind_rows(predicted_mitos_as, predicted_mitos_bas,
+                             predicted_mitos_zy)
+#predicted_mitos <- cleaning_functions(predicted_mitos)
+
+# predictions based on genome tree
+predicted_mitos_as_li <-
+  get_predicted(mod_Li_mitos_as, phy = "Ascomycota", mod = "Genome tree")
+
+predicted_mitos_bas_li <-
+  get_predicted(mod_Li_mitos_bas, phy = "Basidiomycota", mod = "Genome tree")
+
+predicted_mitos_zy_li <-
+  get_predicted(mod_Li_mitos_zy, phy = "Zygomycetous\nfungi", mod = "Genome tree")
+
+predicted_mitos_zoo_li <-
+  get_predicted(mod_Li_mitos_zoo, phy = "Zoosporic\nfungi", mod = "Genome tree")
+
+predicted_mitos_mic_li <-
+  get_predicted(mod_Li_mitos_mic, phy = "Microsporidia", mod = "Genome tree")
+
+predicted_mitos_as_li$mega <- "Ascomycota"
+predicted_mitos_as_li <- 
+  predicted_mitos_as_li[-grep("endopara" ,
+                               predicted_mitos_as_li$simpleFunct), ]
+
+predicted_mitos_bas_li$mega <- "Basidiomycota"
+predicted_mitos_bas_li <- 
+  predicted_mitos_bas_li[-grep("endophyte" ,
+                                    predicted_mitos_bas_li$simpleFunct), ]
+
+
+predicted_mitos_zy_li$mega <- "Non-Dykaria"
+predicted_mitos_zy_li <- 
+  predicted_mitos_zy_li[-grep("Fungal" ,
+                               predicted_mitos_zy_li$simpleFunct), ]
+
+predicted_mitos_zoo_li$mega <- "Non-Dykaria"
+predicted_mitos_mic_li$mega <- "Non-Dykaria"
+predicted_mitos_mic_li$simpleFunct[1] <- "02.5_Animal endoparasite"
+
+predicted_mitos_Li <- bind_rows(predicted_mitos_as_li, predicted_mitos_bas_li,
+                                predicted_mitos_zy_li, predicted_mitos_zoo_li,
+                               predicted_mitos_mic_li)
+
+temp <- data.frame(names=
+               unique(c(To_plot_mitos$simpleFunct, To_plot_ascos_basidios$simpleFunct)))
+temp <- data.frame(names = temp$names[order(temp$names)],
+                   simpleFunct = c(carto_pal(12, "Safe")[1],
+                                   carto_pal(7, "Peach")[3],
+                                   carto_pal(12, "Safe")[2:9]))
+
+#predicted_mitos_Li <- cleaning_functions(predicted_mitos_Li)
+
+temp2 <- temp
+
+temp2$simpleFunct <- c("#44AA99",rep("#882255", 9))
+
+predicted_ascos_basidios$Lifestyle <- predicted_ascos_basidios$simpleFunct
+predicted_ascos_basidios$Lifestyle[grep("Asymbiotic",
+                                   predicted_ascos_basidios$simpleFunct)] <- "Asymbiotic fungi"
+predicted_ascos_basidios$Lifestyle[-grep("Asymbiotic",
+                                   predicted_ascos_basidios$simpleFunct)] <- "Symbiotic fungi"
+#
+predicted_mitos$Lifestyle <- predicted_mitos$simpleFunct
+predicted_mitos$Lifestyle[grep("Asymbiotic",
+                                   predicted_mitos$simpleFunct)] <- "Asymbiotic fungi"
+predicted_mitos$Lifestyle[-grep("Asymbiotic",
+                                   predicted_mitos$simpleFunct)] <- "Symbiotic fungi"
+
+
+```
+
+Figure 2
+
+```{r}
+library(cowplot)
+
+ggsave(filename="Figures\\Figure_2\\EL_Figure2.svg",
+       plot =cowplot::plot_grid(
+         coloreando(predicted_ascos_basidios,
+           temp2) %>% 
+  ggplot() +
+  geom_hline(yintercept = 10^2.08, color = "#44AA99",
+             linetype = "solid", linewidth = 2, alpha = 0.2) +
+  geom_hline(yintercept = 10^2.24, color = "#44AA99",
+             linetype = "solid", linewidth = 2, alpha = 0.2) +
+  geom_pointrange(aes(x = simpleFunct, y = 10^Estimate,
+                      ymin = 10^lower, ymax = 10^upper,
+                      color = colores), size = 2) + 
+  labs(y = expression("Sexual spore size ("*mu*"m³)")) +
+  scale_color_identity() +
+  facet_wrap(phylum~., scales = "free_x")+ #, scales = "free_y") +
+  scale_y_log10(#limits=c(10^1, 10^5),
+                labels = scales::trans_format("log10", scales::math_format(10^.x))) +
+  theme_1,
+
+coloreando(predicted_mitos,
+           temp2) %>% 
+  filter(grepl("Asco|Basidio", phylum)) %>% 
+  ggplot() +
+  geom_hline(yintercept = 10^1.67, color = "#44AA99",
+             linetype = "solid", linewidth = 2, alpha = 0.2) +
+  geom_hline(yintercept = 10^1.73, color = "#44AA99",
+             linetype = "solid", linewidth = 2, alpha = 0.2) +
+  geom_pointrange(aes(x = simpleFunct, y = 10^Estimate,
+                      ymin = 10^lower, ymax = 10^upper,
+                      color = colores), size = 2) +
+  labs(y = expression("Asexual spore size ("*mu*"m³)")) +
+  scale_color_identity() +
+  facet_wrap(phylum~., scales = "free_x")+ #, scales = "free_y") +
+  scale_y_log10(#limits=c(10^1, 10^5),
+                labels = scales::trans_format("log10", scales::math_format(10^.x))) +
+  theme_1,
+  
+  coloreando(bind_rows(predicted_mitos_Li[grep("Micro|Zoo", predicted_mitos_Li$phylum), ],
+                       predicted_mitos[grep("Zygo", predicted_mitos$phylum), ]),
+           temp2) %>% 
+  filter(!grepl("Asco|Basidio", phylum)) %>% 
+  ggplot() +
+  geom_hline(yintercept = 10^1.83, color = "#44AA99",
+             linetype = "solid", linewidth = 2, alpha = 0.2) +
+  geom_hline(yintercept = 10^2.41, color = "#44AA99",
+             linetype = "solid", linewidth = 2, alpha = 0.2) +
+  geom_pointrange(aes(x = simpleFunct, y = 10^Estimate,
+                      ymin = 10^lower, ymax = 10^upper,
+                      color = colores), size = 2) +
+  labs(y = expression("Asexual spore size ("*mu*"m³)")) +
+  scale_color_identity() +
+  facet_wrap(phylum~., scales = "free_x")+ #, scales = "free_y") +
+  scale_y_log10(breaks = c(10^0,10^1,10^2,10^3,10^4),
+                labels = scales::trans_format("log10", scales::math_format(10^.x))) +
+  theme_1,
+  ncol = 1, align = "v",
+rel_heights = c(1,1,0.7), labels = "auto", label_size = 35),
+height = 28, width = 21,device="svg")
+```
+
+
+
+## Figure 3
+
+
+```{r, eval=FALSE}
+
+library(brms)
+library(ggridges)
+library(patchwork)
+
+# objects needed to produce this figure created using 'miseq/scripts/geoextent_brm_host_modelfit.R'
+# download workspace before loading
+if(!file.exists('miseq')) dir.create('miseq')
+if(!file.exists('miseq/output')) dir.create('miseq/output')
+if(!file.exists('miseq/output/workspace')) dir.create('miseq/output/workspace')
+# if(!file.exists('miseq/output/workspace/geoextent_brm_host.RData')) {
+#   download.file('https://cloudstor.aarnet.edu.au/plus/s/c7kamHx0RNM6pCd/download',
+#                 'miseq/output/workspace/geoextent_brm_host.RData')
+# }
+
+load('miseq/output/workspace/geoextent_brm_host.RData')
+
+### confidence bands for slope; for both response variables, simplest model fit the data best (fit2)
+
+# ext
+slp.n <- c(attr(fit2.ext$fit, 'sim')$samples[[1]][['b_log10.sporeVolume.cent']][1001:2000], 
+           attr(fit2.ext$fit, 'sim')$samples[[2]][['b_log10.sporeVolume.cent']][1001:2000], 
+           attr(fit2.ext$fit, 'sim')$samples[[3]][['b_log10.sporeVolume.cent']][1001:2000], 
+           attr(fit2.ext$fit, 'sim')$samples[[4]][['b_log10.sporeVolume.cent']][1001:2000])
+conf.95.n <- slp.n > quantile(slp.n, prob=0.025) & slp.n < quantile(slp.n, prob=0.975)
+conf.50.n <- slp.n > quantile(slp.n, prob=0.25) & slp.n < quantile(slp.n, prob=0.75)
+slp.y <- c(attr(fit2.ext$fit, 'sim')$samples[[1]][['b_log10.sporeVolume.cent:host.assocyes']][1001:2000], 
+           attr(fit2.ext$fit, 'sim')$samples[[2]][['b_log10.sporeVolume.cent:host.assocyes']][1001:2000], 
+           attr(fit2.ext$fit, 'sim')$samples[[3]][['b_log10.sporeVolume.cent:host.assocyes']][1001:2000], 
+           attr(fit2.ext$fit, 'sim')$samples[[4]][['b_log10.sporeVolume.cent:host.assocyes']][1001:2000])
+conf.95.y <- slp.y > quantile(slp.y, prob=0.025) & slp.y < quantile(slp.y, prob=0.975)
+conf.50.y <- slp.y > quantile(slp.y, prob=0.25) & slp.y < quantile(slp.y, prob=0.75)
+slp.e <- bind_rows(data.frame(host.assoc='no', response='extent', slope=slp.n, conf.50=conf.50.n, conf.95=conf.95.n), 
+                 data.frame(host.assoc='yes', response='extent', slope=slp.n+slp.y, conf.50=conf.50.y, conf.95=conf.95.y))
+rm(slp.n, slp.y, conf.95.n, conf.50.n, conf.95.y, conf.50.y)
+
+
+# area
+slp.n <- c(attr(fit2.area$fit, 'sim')$samples[[1]][['b_log10.sporeVolume.cent']][1001:2000], 
+                 attr(fit2.area$fit, 'sim')$samples[[2]][['b_log10.sporeVolume.cent']][1001:2000], 
+                 attr(fit2.area$fit, 'sim')$samples[[3]][['b_log10.sporeVolume.cent']][1001:2000], 
+                 attr(fit2.area$fit, 'sim')$samples[[4]][['b_log10.sporeVolume.cent']][1001:2000])
+conf.95.n <- slp.n > quantile(slp.n, prob=0.025) & slp.n < quantile(slp.n, prob=0.975)
+conf.50.n <- slp.n > quantile(slp.n, prob=0.25) & slp.n < quantile(slp.n, prob=0.75)
+slp.y <- c(attr(fit2.area$fit, 'sim')$samples[[1]][['b_log10.sporeVolume.cent:host.assocyes']][1001:2000], 
+                 attr(fit2.area$fit, 'sim')$samples[[2]][['b_log10.sporeVolume.cent:host.assocyes']][1001:2000], 
+                 attr(fit2.area$fit, 'sim')$samples[[3]][['b_log10.sporeVolume.cent:host.assocyes']][1001:2000], 
+                 attr(fit2.area$fit, 'sim')$samples[[4]][['b_log10.sporeVolume.cent:host.assocyes']][1001:2000])
+conf.95.y <- slp.y > quantile(slp.y, prob=0.025) & slp.y < quantile(slp.y, prob=0.975)
+conf.50.y <- slp.y > quantile(slp.y, prob=0.25) & slp.y < quantile(slp.y, prob=0.75)
+slp.a <- bind_rows(data.frame(host.assoc='no', response='area', slope=slp.n, conf.50=conf.50.n, conf.95=conf.95.n), 
+                   data.frame(host.assoc='yes', response='area', slope=slp.n+slp.y, conf.50=conf.50.y, conf.95=conf.95.y))
+rm(slp.n, slp.y, conf.95.n, conf.50.n, conf.95.y, conf.50.y)
+
+# join
+slp <- bind_rows(slp.e, slp.a)
+slp %>% group_by(host.assoc, response) %>% summarise(mean=mean(slope))
+
+
+### plot
+labs <- c(area = 'Range area', extent = 'Maximum distance')
+
+
+theme_jeff <- theme(legend.position='none', 
+        panel.background = element_blank(),
+        axis.title = element_text(size=25),
+        axis.text = element_text(size = 25),
+         panel.grid.major.x = element_blank(),
+        panel.grid.major.y = element_line(size = 0.25, linetype = 'longdash',
+                                        colour = "gray"),
+        strip.background = element_blank(),
+        strip.text.y = element_blank())
+
+# extent and area by volume
+temp %>% 
+  select(Species, order, log10.sporeVolume, host.assoc, geo_extent_prop, geo_area_prop) %>% 
+  pivot_longer(cols=ends_with('prop'), names_to='response', values_to='value') %>% 
+  mutate(Life_style = recode(host.assoc, no='Free-living', yes='Plant-associated')) %>% 
+  ggplot(aes(x=log10.sporeVolume, y=car::logit(value), colour=Life_style)) + 
+  geom_point(alpha=0.5, shape=16,size=4) + 
+  stat_smooth(method='lm', alpha=0.25) + 
+  labs(x=expression("Spore size ("*mu*"m³)"), y='Geographic extent\n(relative to maximum distance/area, logit)') + 
+  facet_grid(rows=vars(response), scales='free_y') + 
+  # scale_colour_manual(name='', values=colorRampPalette(c('black', 'orange'))(3)) +
+  scale_color_manual(values= c("#88CCEE", "#661100")) -> p1 # +
+  #scale_colour_brewer(palette = "YlOrRd") +
+  
+
+slp %>% 
+    mutate(Life_style = recode(host.assoc, no='Free-living', yes='Plant-associated')) %>% 
+  ggplot(aes(x=slope,  fill=Life_style)) + 
+  geom_density(alpha=0.9) + 
+  geom_vline(xintercept=0) + 
+  labs(x='Slope estimate', y='Density') + 
+  facet_grid(rows=vars(response), labeller=labeller(response=labs)) + 
+  # scale_colour_manual(name='', values=colorRampPalette(c('black', 'orange'))(3)) + 
+  scale_fill_manual(values= c("#88CCEE", "#661100")) -> p2#+
+  #scale_colour_brewer(palette = "YlOrRd") + 
+  #scale_fill_brewer(palette = "YlOrRd")+
+  
+
+leyenda <- cowplot::get_legend(p2 +
+                            guides(color = guide_legend(title=element_blank())) +
+                                theme(legend.position = "bottom",
+                                      legend.text = element_text(size = 25)))
+
+```
+
+
+```{r}
+pdf("Figures/Figure_3/Figure3_densityplots.pdf",
+    width = 17.2,
+    height = 9.2)
+
+cowplot::plot_grid(
+  p1 + theme_jeff,
+  p2 + theme_jeff,
+  align = "h",
+  labels = "auto",
+  label_size = 35,
+  leyenda,
+  ncol = 2,
+  rel_heights = c(1,.1)
+)
+
+dev.off()
+```
+
+
+
+
+## Figure S1
+```{r}
+#data.frame(table(Spore_functions[, c("phylum")]))
+  
+Ascos<-c(`Spore` = 20112,`No_spore` = 63713)#83825
+Basidios<-c(`Spore` = 8008,`No_spore` = 40397)#48405
+Zoos<-c(`Spore` = 21,`No_spore` = 1250)#1271
+Glomeros<-c(`Spore` = 274,`No_spore` = 10)#284
+Zygos<-c(`Spore` = 511,`No_spore` = 574)#1085
+Micro<-c(`Spore` = 15,`No_spore` = 1207)#1222
+
+library(waffle)
+library(RColorBrewer)
+
+waffle(
+  Ascos / 100, rows = 20, size = 0.5,
+  colors = c("blue","light blue"),
+  title = "Ascomycota",
+  #xlab = "1 square = 100 Species",
+  pad = 3,
+  legend_pos = "none"
+  #use_glyph = "star"
+)->A
+
+waffle(
+  Basidios / 100, rows = 12, size = 0.5,
+  colors = c("blue","light blue"),
+  title = "Basidiomycota",
+  #xlab = "1 square = 100 Species",
+  pad = 3,
+  legend_pos = "none"
+  #use_glyph = "star"
+)->B
+
+waffle(
+  Zoos , rows = 20, size = 0.5,
+  colors = c("blue","light blue"),
+  title = "Zoosporic fungi",
+  #xlab = "1 square = 1 Species", 
+  pad = 3,
+  legend_pos = "none"
+  #use_glyph = "star"
+)->Zoo
+
+waffle(
+  Glomeros , rows = 7, size = 0.5,
+  colors = c("blue","light blue"),
+  title = "Glomeromycetous fungi",
+  #xlab = "1 square = 1 Species",
+  pad = 3,
+  legend_pos = "none"
+  #use_glyph = "star"
+)->G
+
+waffle(
+  Zygos , rows = 20, size = 0.5,
+  colors = c("blue","light blue"),
+  title = "Zygomycetous fungi",
+  #xlab = "1 square = 1 Species", 
+  pad = 3,
+  legend_pos = "none"
+  #use_glyph = "star"
+)->Z
+
+waffle(
+  Micro , rows = 20, size = 0.5,
+  colors = c("blue","light blue"),
+  title = "Microsporidian fungi",
+  #xlab = "1 square = 1 Species", 
+  pad = 3,
+  legend_pos = "none"
+  #use_glyph = "star"
+)->M
+
+#Ploting them. First the "higher fungi (A and B) and then the lower fungi (C,G,Z)
+#"Figures/Figure_1/Figure1_violinplots.pdf",
+
+pdf("Figures/Figure_S1/Ascos_Basidios.pdf",width = 8.5, height = 11 )
+iron(A, B)
+dev.off()
+
+pdf("Figures/Figure_S1/glomero_zygos.pdf",width = 8.5, height = 11 )
+iron(Z, G)
+dev.off()
+
+
+pdf("Figures/Figure_S1/zoo_micro.pdf",width = 8.5, height = 11 )
+iron(Zoo, M)
+dev.off()
+```
+
+
+Figure S2: Donut plots
+```{r}
+library(webr)
+
+For_donut <- 
+  Spore_functions %>% 
+  filter(!is.na(SporeType)) %>% # weird three cases
+  group_by(SporeType, phylum, names_to_use) %>% 
+  filter(!duplicated(names_to_use)) %>% 
+  mutate(phylum = case_when(
+    !grepl("Asco|Basidio", phylum)~"Non-dykaria",
+    grepl("Asco", phylum) ~ "Ascomycota",
+    grepl("Basidio", phylum) ~ "Basidiomycota")) %>% 
+  mutate(SporeType = case_when(
+    grepl("Multi", SporeType)~"Other",
+    grepl("Mito", SporeType) ~ "Mitospores",
+    grepl("Meio", SporeType) ~ "Meiospores")) %>% 
+  
+  group_by(SporeType, phylum) %>% 
+  count() %>% 
+  filter(n>2)
+
+pdf("Figures/Figure_S2/Donut_plot_sporeType_phyla.pdf",
+    width = 4.8,
+    height = 8.4)  
+PieDonut(For_donut, aes(SporeType, phylum, count = n),
+         explode = c(3), explodePie = T)
+dev.off()
+
+For_donut2 <- 
+  Spore_functions %>% 
+  filter(!grepl("Asco|Basidio", phylum)) %>% 
+  mutate(phylum = recode(phylum, Chytridiomycota = "Zoosporic fungi")) %>% 
+  mutate(phylum = recode(phylum, Glomeromycota = "Zygomycetous fungi (AMF)")) %>% 
+  mutate(phylum = recode(phylum, Zoopagomycota = "Zygomycetous fungi")) %>% 
+  mutate(phylum = recode(phylum, Mucoromycota = "Zygomycetous fungi")) %>% 
+  mutate(phylum = recode(phylum, Blastocladiomycota = "Zoosporic fungi")) %>% 
+  mutate(phylum = recode(phylum, Blastocladiomycota = "Zoosporic fungi")) %>% 
+  mutate(phylum = recode(phylum, Neocallimastigomycota = "Zoosporic fungi")) %>%
+  filter(!is.na(SporeType)) %>% # weird three cases
+  group_by(SporeType, phylum, names_to_use) %>% 
+  filter(!duplicated(names_to_use)) %>% 
+  group_by(SporeType, phylum) %>% 
+  count() %>% 
+  filter(n>2)
+
+
+pdf("Figures/Figure_S2/Donut_plot_sporeType_phyla_lowerF.pdf",
+    width = 4.8,
+    height = 8.4)  
+PieDonut(For_donut2, aes(SporeType, phylum, count = n)
+)
+dev.off()
+
+For_donut3 <- 
+  AllFungi %>% 
+  filter(!is.na(SporeName)) %>% 
+  filter(!is.na(SporeArea)) %>% 
+  group_by(SporeType, SporeName, phylum, names_to_use) %>% 
+  filter(!duplicated(names_to_use)) %>% 
+  filter(!grepl("Multi", SporeType)) %>% 
+  group_by(SporeType, SporeName) %>% 
+  count() %>% 
+  filter(n>2)
+
+pdf("Figures/Figure_S2/Donut_plot_sporeType_SporeName.pdf",
+    width = 4.8,
+    height = 8.4)  
+PieDonut(For_donut3, aes(SporeType, SporeName, count = n))
+dev.off()
+
+For_donut4 <- 
+  AllFungi %>% 
+  filter(!is.na(SporeName)) %>% 
+  filter(!is.na(SporeArea)) %>% 
+  group_by(SporeType, SporeName, phylum, names_to_use) %>% 
+  filter(!duplicated(names_to_use)) %>% 
+  filter(grepl("Multi", SporeType)) %>% 
+  group_by(SporeType, SporeName) %>% 
+  count() %>% 
+  filter(n>2)
+
+pdf("Figures/Figure_S2/Donut_plot_sporeType_SporeName_Multi.pdf",
+    width = 4.8,
+    height = 8.4)    
+PieDonut(For_donut4, aes(SporeType, SporeName, count = n))
+dev.off()
+```
+
+Figure S3
+
+```{r}
+pdf("Figures/Figure_S3/FigureS3_bubbleplot.pdf",
+    width = 23,
+    height = 28)
+cowplot::plot_grid(
+# Panel a (sexual spores of ascos and basidios)
+coloreando(To_plot_ascos_basidios, temp) %>% 
+  group_by(phylum, order, SporeType, simpleFunct, colores) %>%
+  summarise(meanV = median(SporeVolume), cvarV = sd(SporeVolume)/mean(SporeVolume),
+            n= n()) %>%
+  ggplot()+
+  aes(x = simpleFunct,
+      y = meanV)+
+  geom_jitter(aes(color = colores,
+                  size= cvarV),
+              alpha = 0.5, width = 0.2) +
+  guides(size = guide_legend(title="Coefficient of\nvariation"),
+         shape = guide_legend(title="Phylogenetic\nregression\nestimate"),
+         color = "none") +
+  scale_size(range = c(1, 20)) +
+  scale_y_log10(#breaks=c(10^1,10^2,10^3,10^4, 10^5),
+                limits=c(10^1, 10^5),
+                labels = scales::trans_format("log10",
+                scales::math_format(10^.x)))+
+  scale_color_identity()+
+  facet_wrap(phylum~., scales = "free_x")+ #, scales = "free_y") +
+  labs(y = expression("Sexual spore size ("*mu*"m³)")) +
+  geom_pointrange(aes(x = simpleFunct, y = 10^Estimate, ymin = 10^lower, ymax = 10^upper,
+                      shape = model, color = colores), size = 2,
+                  position = position_dodge(width = 0.5),
+                  data = coloreando(bind_rows(predicted_ascos_basidios_li,
+                                   predicted_ascos_basidios), temp)) +  theme_1,
+# Panel b (asexual spores of ascos and basidios)
+coloreando(To_plot_mitos, temp) %>% 
+  group_by(mega, phylum, order, SporeType, simpleFunct, colores) %>%
+  summarise(meanV = median(SporeVolume),
+            cvarV = sd(SporeVolume)/mean(SporeVolume),
+            n= n()) %>%
+  filter(grepl("Asco|Basidio", phylum)) %>% 
+  ggplot()+
+  aes(x = simpleFunct,
+      y = meanV)+
+  geom_jitter(aes(color = colores,
+                  size= cvarV),
+              alpha = 0.5, width = 0.2) +
+  guides(size = guide_legend(title="Coefficient of\nvariation"),
+         shape = guide_legend(title="Phylogenetic\nregression\nestimate"),
+         color = "none") +
+  scale_size(range = c(1, 20)) +
+  scale_y_log10(#limits=c(10^1, 10^5),
+                labels = scales::trans_format("log10", scales::math_format(10^.x)))+
+  #scale_color_brewer(palette = "Dark2") +
+  scale_color_identity()+
+  #scale_x_continuous("simpleFunct")
+  facet_wrap(phylum~., scales = "free_x")+ #, scales = "free_y") +
+  labs(y = expression("Asexual spore size ("*mu*"m³)")) +
+  geom_pointrange(aes(x = simpleFunct, y = 10^Estimate, ymin = 10^lower, ymax = 10^upper,
+                      shape = model, color = colores), size = 2,
+                  position = position_dodge(width = 0.5),
+                  data = coloreando(bind_rows(predicted_mitos_Li ,predicted_mitos), temp)%>%
+                    filter(grepl("Asco|Basidio", phylum))) +  theme_1 ,
+
+# Panel c (asexual spores of non-dikarya)
+coloreando(To_plot_mitos, temp) %>% 
+  group_by(mega, phylum, order, SporeType, simpleFunct, colores) %>%
+  summarise(meanV = median(SporeVolume), cvarV = sd(SporeVolume)/mean(SporeVolume),
+            n= n()) %>%
+  filter(!grepl("Asco|Basidio", phylum)) %>% 
+  ggplot()+
+  aes(x = simpleFunct,
+      y = meanV)+
+  geom_jitter(aes(color = colores,
+                  size= cvarV),
+              alpha = 0.5, width = 0.2) +
+  guides(size = guide_legend(title="Coefficient of\nvariation",
+                             ),
+         shape = guide_legend(title="Phylogenetic\nregression\nestimate"),
+         color = "none") +
+  scale_size(range = c(1, 20)) +
+  scale_y_log10(#limits=c(10^1, 10^5),
+                labels = scales::trans_format("log10", scales::math_format(10^.x)))+
+  #scale_color_carto_d(palette = "Safe") +
+  scale_color_identity()+
+  facet_wrap(phylum~., scales = "free_x")+ #, scales = "free_y") +
+  labs(y = expression("Asexual spore size ("*mu*"m³)")) +
+  geom_pointrange(aes(x = simpleFunct, y = 10^Estimate, ymin = 10^lower, ymax = 10^upper,
+                      shape = model, color = colores), size = 2,
+                  position = position_dodge(width = 0.5),
+                  data = coloreando(bind_rows(predicted_mitos_Li ,predicted_mitos), temp)%>%
+                    filter(!grepl("Asco|Basidio", phylum))) +  theme_1,
+ncol = 1, align = "v",
+rel_heights = c(1,1,0.7), labels = "auto", label_size = 35)
+dev.off()
+
+```
+
+
+Figure S4
+
+```{r}
+# For plant associated fungi # For faculatative vs obligate symbionts
+
+#To_plot_pa_me <- bind_rows(ascospores2_pa, basidiospores2_pa)
+
+# based on genome tree
+predicted_pa_me_as_Li <- 
+  get_predicted(mod_Li_pa_me_symb_as, phy = "Ascomycota", mod = "Genome tree")
+predicted_pa_me_as_Li$simpleFunct <- c("Facultative association",
+                                    "Obligate association")
+
+predicted_pa_me_bas_Li <- 
+  get_predicted(mod_Li_pa_me_symb_bas, phy = "Basidiomycota", mod = "Genome tree")
+predicted_pa_me_bas_Li$simpleFunct <- c("Facultative association",
+                                     "Obligate association")
+
+predicted_pa_me_li <- bind_rows(predicted_pa_me_as_Li,
+                             predicted_pa_me_bas_Li)
+
+names(predicted_pa_me_li)[5] <- "Life_style"
+
+# based on taxonomy tree
+predicted_pa_me_as <- 
+  get_predicted(mod_tax_pa_me_symb_as, phy = "Ascomycota", mod = "Taxonomy tree")
+predicted_pa_me_as$simpleFunct <- c("Facultative association", "Obligate association")
+
+predicted_pa_me_bas <- 
+  get_predicted(mod_tax_pa_me_symb_bas, phy = "Basidiomycota", mod = "Taxonomy tree")
+predicted_pa_me_bas$simpleFunct <- c("Facultative association",
+                                     "Obligate association")
+
+predicted_pa_me <- bind_rows(predicted_pa_me_as,
+                             predicted_pa_me_bas)
+
+names(predicted_pa_me)[5] <- "Life_style"
+
+
+# based on genome tree
+predicted_pa_mi_as_Li <- 
+  get_predicted(mod_Li_pa_mi_symb_as, phy = "Ascomycota", mod = "Genome tree")
+predicted_pa_mi_as_Li$simpleFunct <- c("Facultative association",
+                                       "Obligate association")
+
+names(predicted_pa_mi_as_Li)[5] <- "Life_style"
+
+# based on taxonomy tree
+predicted_pa_mi_as <- 
+  get_predicted(mod_tax_pa_mi_symb_as, phy = "Ascomycota", mod = "Taxonomy tree")
+predicted_pa_mi_as$simpleFunct <- c("Facultative association", "Obligate association")
+
+names(predicted_pa_mi_as)[5] <- "Life_style"
+
+leyenda <- 
+  temp %>% 
+  mutate(dumb_y = rep(c(2,1), c(5,5)),
+         dumb_x = c(1:5,1:5)) %>% 
+  mutate(names = gsub("\\d+_|\\d+\\.\\d_", "", names)) %>% 
+  mutate(names = gsub("\\n", " ", names)) %>% 
+  
+  ggplot() +
+  aes(x = dumb_x, y = dumb_y, color = simpleFunct) +
+  geom_point(size = 15) +
+  geom_text(aes(label= names), check_overlap = T,
+            nudge_x = 0.5, color = "black",
+            size = 7) +
+  scale_color_identity() +
+  scale_y_continuous(breaks = c(1,2))+
+  theme(panel.background = element_blank(),
+        axis.title.x = element_blank(),
+        axis.text.x = element_blank(),
+        axis.title.y = element_blank(),
+        axis.text.y = element_blank())
+
+
+pdf("Figures/Figure_S4/EL_FigureS4_bubbleplot.pdf",
+    width = 23,
+    height = 28)
+cowplot::plot_grid(
+                   
+#Sexual spores
+#part_1 <- 
+  coloreando(cleaning_functions(To_Analysis_pa_me),
+           temp) %>% 
+  filter(!grepl("Free", Life_style)) %>% 
+  #filter(grepl("Asco", phylum)) %>% 
+  group_by(phylum, order, SporeType, Life_style, simpleFunct, colores) %>%
+  summarise(meanV = median(SporeVolume), cvarV = sd(SporeVolume)/mean(SporeVolume),
+            n= n()) %>%
+  ggplot()+
+  aes(x = Life_style,
+      y = meanV)+
+  geom_jitter(aes(color = colores, size= cvarV),
+              alpha = 0.8, width = 0.2) +
+  guides(size = guide_legend(title="Coefficient of\nvariation"),
+         color = guide_legend(title = element_blank(),
+                              label.theme = element_text(size = 15),
+                              override.aes = list(size = 7))) +
+  scale_size(range = c(1, 20)) +
+  geom_pointrange(aes(y = 10^Estimate, ymin = 10^lower, ymax = 10^upper,
+                      shape = model), size = 2,
+                  position = position_dodge(width = 0.2),
+                  data = bind_rows(predicted_pa_me_li,
+                                   predicted_pa_me)) +
+  
+  scale_y_log10(#breaks=c(10^1,10^2,10^3,10^4,10^5),
+    limits=c(10^1, 10^4.5),
+    labels = scales::trans_format("log10", scales::math_format(10^.x)))+
+  scale_color_identity() +
+  facet_wrap(phylum~., scales = "free_x")+ #, scales = "free_y") +
+  labs(y = expression("Sexual spore size ("*mu*"m³)")) +  theme_1,
+
+#part_2 <- 
+# For asexual spores
+coloreando( cleaning_functions(To_Analysis_pa_mi), temp) %>% 
+  filter(!grepl("Free", Life_style)) %>% 
+  filter(grepl("Asco", phylum)) %>% 
+  group_by(phylum, order, SporeType, Life_style, simpleFunct, colores) %>%
+  summarise(meanV = median(SporeVolume), cvarV = sd(SporeVolume)/mean(SporeVolume),
+            n= n()) %>%
+  ggplot()+
+  aes(x = Life_style,
+      y = meanV)+
+  geom_jitter(aes(color = colores, size= cvarV),
+              alpha = 0.8, width = 0.2) +
+  guides(size = guide_legend(title="Coefficient of\nvariation"),
+         color = guide_legend(title = element_blank(),
+                              label.theme = element_text(size = 15),
+                              override.aes = list(size = 7))) +
+  scale_size(range = c(1, 20)) +
+  geom_pointrange(aes(y = 10^Estimate, ymin = 10^lower, ymax = 10^upper,
+                  shape = model), size = 2,
+                  position = position_dodge(width = 0.2),
+                  data = bind_rows(predicted_pa_mi_as_Li,
+                                   predicted_pa_mi_as)) +
+  
+  scale_y_log10(#breaks=c(10^1,10^2,10^3,10^4,10^5),
+                labels = scales::trans_format("log10", scales::math_format(10^.x)))+
+  scale_color_identity() +
+  #facet_wrap(phylum~., scales = "free_x")+ #, scales = "free_y") +
+  #facet_wrap(phylum~., scales = "free")+ #, scales = "free_y") +
+  labs(y = expression("Asexual spore size ("*mu*"m³)")) +  theme_1,
+
+leyenda,
+labels = "AUTO", label_size = 35,
+rel_heights = c(1,1,0.2),
+ncol = 1, align = "v")
+
+dev.off()
+```
+
+Figure S6
+
+
+Supplementary information: Comparing the values obtained from the Algorithm (all with an ID from Mycobank) and data provided by experts
+
+```{r}
+#Basidiospores
+Expert_data<-
+AllFungi[which(grepl("Bassler|Jenna",AllFungi$description__id)&
+                 AllFungi$SporeName=="Basidiospores"),]%>%
+            group_by(phylum,class,order,family,genus,names_to_use) %>% 
+  summarize_at(c("SporeVolume"),mean)%>%
+  ungroup()%>%
+  select(names_to_use,SporeVolume)%>%
+  rename(SporeVol_Expert=SporeVolume)
+
+Comp_Expert<-
+left_join(Expert_data,
+AllFungi[which(AllFungi$names_to_use%in%Expert_data$names_to_use&
+                 AllFungi$SporeName=="Basidiospores"&
+                 AllFungi$width_extreme==F&
+                 AllFungi$length_extreme==F&
+                 grepl("[[:digit:]]",AllFungi$description__id)&
+                 !grepl("Bassler|Jenna",AllFungi$description__id)),]%>%
+            group_by(phylum,class,order,family,genus,names_to_use) %>% 
+  summarize_at(c("SporeVolume"),mean)%>%
+  ungroup()%>%
+  select(names_to_use,SporeVolume)%>%
+  rename(SporeVol_Algo_extr=SporeVolume))
+
+Comp_Expert<-Comp_Expert[-which(is.na(Comp_Expert$SporeVol_Algo_extr)),]
+
+basidio_comp<-summary(lm(Comp_Expert$SporeVol_Algo_extr~Comp_Expert$SporeVol_Expert))
+
+bas<-
+Comp_Expert%>%
+  filter(Comp_Expert$SporeVol_Expert<700)%>%
+  ggplot()+
+  aes(x=SporeVol_Expert,y=SporeVol_Algo_extr)+
+  geom_point()+
+  geom_smooth(method='lm')+
+  labs(title = "Comparision values for Basidiospores",
+       subtitle = "y=-12.92+1.29x, r2=0.88, p<0.001, n=317 species",
+       x="Spore Volume (um3) experts based",
+       y="Spore Volume (um3) algorithm based")
+
+#Ascospores
+Expert_data_asc<-#Selecting entries provided by experte
+AllFungi[which(grepl("Comp",AllFungi$description__id)&
+                 AllFungi$SporeName=="Ascospores"),]%>%
+            group_by(phylum,class,order,family,genus,base_name) %>% 
+  summarize_at(c("SporeVolume"),mean)%>%
+  ungroup()%>%
+  select(base_name,SporeVolume)%>%
+  rename(SporeVol_Expert=SporeVolume)
+
+Comp_Expert_asc<-#Selecting entries extracted with the Algorithm
+left_join(Expert_data_asc,
+AllFungi[which(AllFungi$base_name%in%Expert_data_asc$base_name&
+                 AllFungi$SporeName=="Ascospores"&
+                 AllFungi$width_extreme==F&
+                 AllFungi$length_extreme==F&
+                 grepl("[[:digit:]]",AllFungi$description__id)&
+                 !grepl("Comp",AllFungi$description__id)),]%>%
+            group_by(phylum,class,order,family,genus,base_name) %>% 
+  summarize_at(c("SporeVolume"),mean)%>%
+  ungroup()%>%
+  select(base_name,SporeVolume)%>%
+  rename(SporeVol_Algo_extr=SporeVolume))
+
+Comp_Expert_asc<-Comp_Expert_asc[-which(is.na(Comp_Expert_asc$SporeVol_Algo_extr)),]
+
+asco_comp<-summary(lm(Comp_Expert_asc$SporeVol_Algo_extr~Comp_Expert_asc$SporeVol_Expert))
+
+asc<-
+Comp_Expert_asc%>%
+  #filter(Comp_Expert_con$SporeVol_Expert<700)%>%
+  ggplot()+
+  aes(x=SporeVol_Expert,y=SporeVol_Algo_extr)+
+  geom_point()+
+  geom_smooth(method='lm')+
+  labs(title = "Comparision values for Ascospores",
+       subtitle = "y=14.71+0.98x, r2=0.96, p<0.001, n=41 species",
+       x="Spore Volume (um3) experts based",
+       y="Spore Volume (um3) algorithm based")
+
+
+
+#Conidia
+Expert_data_con<-
+AllFungi[which(grepl("Comp",AllFungi$description__id)&
+                 AllFungi$SporeName=="Conidia"),]%>%
+            group_by(phylum,class,order,family,genus,base_name) %>% 
+  summarize_at(c("SporeVolume"),mean)%>%
+  ungroup()%>%
+  select(base_name,SporeVolume)%>%
+  rename(SporeVol_Expert=SporeVolume)
+
+Comp_Expert_con<-
+left_join(Expert_data_con,
+AllFungi[which(AllFungi$base_name%in%Expert_data_con$base_name&
+                 AllFungi$SporeName=="Conidia"&
+                 AllFungi$width_extreme==F&
+                 AllFungi$length_extreme==F&
+                 grepl("[[:digit:]]",AllFungi$description__id)&
+                 !grepl("Comp",AllFungi$description__id)),]%>%
+            group_by(phylum,class,order,family,genus,base_name) %>% 
+  summarize_at(c("SporeVolume"),mean)%>%
+  ungroup()%>%
+  select(base_name,SporeVolume)%>%
+  rename(SporeVol_Algo_extr=SporeVolume))
+
+Comp_Expert_con<-Comp_Expert_con[-which(is.na(Comp_Expert_con$SporeVol_Algo_extr)),]
+
+coni_comp<-summary(lm(Comp_Expert_con$SporeVol_Algo_extr~Comp_Expert_con$SporeVol_Expert))
+
+con<-
+Comp_Expert_con%>%
+  #filter(Comp_Expert_con$SporeVol_Expert<700)%>%
+  ggplot()+
+  aes(x=SporeVol_Expert,y=SporeVol_Algo_extr)+
+  geom_point()+
+  geom_smooth(method='lm')+
+  labs(title = "Comparision values for Conidia",
+       subtitle = "y=111.68+0.98x, r2=0.96, p<0.001, n=229 species",
+       x="Spore Volume (um3) experts based",
+       y="Spore Volume (um3) algorithm based")
+
+
+```
+
+
+Exporting the figure of the comparison
+```{r}
+png("Figures/Fig_S4_Comparison_values.png",width = 180,height = 360,units="mm",res = 300)
+gridExtra::grid.arrange(bas,asc,con,nrow=3)
+dev.off()
+
+```
+
+
+```
+
