@@ -1,0 +1,7 @@
+"model","Diff. Facultative vs Obligate symbiosis","StdErr","t.value","p.value","Pagels_lambda","r2","n"
+"ascospores (genome tree model)",1.46,0.4,3.68,"<0.01",0.76,0.11,117
+"ascospores (taxonomy tree model)",1.09,0.18,5.98,"<0.01",0.72,0.04,792
+"basidiospores (genome tree model)",0.29,0.14,2,"0.05",0.97,0.04,106
+"basidiospores (taxonomy tree model)",0.1,0.1,1.02,"0.31",0.96,0,606
+"mitospores_as (genome tree model)",1.77,0.77,2.31,"0.02",0.7,0.02,252
+"mitospores_as (taxonomy tree model)",1.65,0.22,7.55,"<0.01",0.77,0.01,4339
